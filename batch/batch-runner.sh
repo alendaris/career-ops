@@ -20,6 +20,7 @@ LOGS_DIR="$BATCH_DIR/logs"
 TRACKER_DIR="$BATCH_DIR/tracker-additions"
 REPORTS_DIR="$PROJECT_DIR/reports"
 APPLICATIONS_FILE="$PROJECT_DIR/data/applications.md"
+PACE_GATE="$BATCH_DIR/pace-gate.sh"
 LOCK_FILE="$BATCH_DIR/batch-runner.pid"
 STATE_LOCK_DIR="$BATCH_DIR/.batch-state.lock"
 STATE_LOCK_PID_FILE="$STATE_LOCK_DIR/pid"
@@ -383,7 +384,7 @@ process_offer() {
       if (( $(echo "$score < $MIN_SCORE" | bc -l) )); then
         update_state "$id" "$url" "skipped" "$started_at" "$completed_at" "$report_num" "$score" "below-min-score" "$retries"
         echo "    ⏭️  Skipped (score: $score < min-score: $MIN_SCORE)"
-        continue
+        return 0
       fi
     fi
 
@@ -551,8 +552,9 @@ main() {
 
   # Process offers
   if (( PARALLEL <= 1 )); then
-    # Sequential processing
+    # Sequential processing with pace-gate between workers
     for i in "${!pending_ids[@]}"; do
+      bash "$PACE_GATE" --quiet || echo "  WARN: pace-gate non-zero, continuing"
       process_offer "${pending_ids[$i]}" "${pending_urls[$i]}" "${pending_sources[$i]}" "${pending_notes[$i]}"
     done
   else

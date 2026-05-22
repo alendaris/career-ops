@@ -43,6 +43,26 @@ The evaluation uses 6 blocks (A-F) with a global score of 1-5:
 - 3.5-3.9 → Decent but not ideal, apply only if specific reason
 - Below 3.5 → Recommend against applying (see Ethical Use in AGENTS.md)
 
+### Scoring Calibration Rules
+
+**Block A — Required vs. preferred:**
+Score Block A on required qualifications only. Preferred/nice-to-have items are noted in the match table but carry minimal weight in the A score. Score ≥ 3.5 when all required qualifications are met; reduce only for hard required gaps.
+
+**Block A — OR-conditional requirements:**
+When a JD lists "X, Y, or Z" as a requirement, meeting any one branch satisfies the requirement. Do not treat the remaining branches as gaps.
+
+**Block A and B — Domain transitions:**
+Domain unfamiliarity (new industry, new business context) is not a showstopper. Analytics, ML, and stakeholder delivery competencies transfer across domains. Do not penalize A or B for industry domain transitions. Only penalize when domain knowledge is explicitly a hard credentialed requirement (active license, certification, clearance, etc.).
+
+**Block B — Archetype parity:**
+All target archetypes listed in `_profile.md` are equally valid North Star targets. Do not rank primary targets against each other or score one archetype higher than another when both are listed as targets.
+
+**Block C — Realistic landing zone:**
+For grade-banded or wide compensation ranges, score Block C against the realistic offer the candidate would receive at their experience level — not the technical floor of the range. A wide range with a low floor is not the same as a role that pays below target if the candidate's realistic grade placement meets the target.
+
+**Block D — Cultural match:**
+Score D based on alignment between the candidate's current work environment (culture, delivery model, team structure) and the target role's described culture. Large enterprise analytics advisory roles (cross-functional analytics, executive stakeholder delivery, translating business questions into data products) are a structural match for candidates from consulting or advisory backgrounds.
+
 ## Posting Legitimacy (Block G)
 
 Block G assesses whether a posting is likely a real, active opening. It does NOT affect the 1-5 global score -- it is a separate qualitative assessment.

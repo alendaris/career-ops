@@ -1,20 +1,28 @@
-# Mode: scan — Portal Scanner (Job Discovery)
+# Mode: scan-serial — Portal Scanner (Serial, Rate-Limited)
 
-Scans configured job portals, filters by title relevance, and adds new offers to the pipeline for later evaluation.
+Scans configured job portals in serial on the **main agent only**. No subagents.
+Checks `batch/pace-check.sh` before each company/step. No parallel execution.
 
-> **Note (v1.5+):** The default scanner (`scan.mjs` / `npm run scan`) is **zero-token** and only queries Greenhouse, Ashby, and Lever public APIs directly. The Playwright/WebSearch levels described below are the **agent** flow (run by Claude/Codex), not what `scan.mjs` does. If a company has no Greenhouse/Ashby/Lever API, `scan.mjs` will skip it; for those cases, the agent must manually complete Level 1 (Playwright) or Level 3 (WebSearch).
+## Execution
 
-## Recommended Execution
+**Main agent only — never delegate to a subagent.**
 
-Run as a subagent to avoid consuming main context:
+---
 
+## Pacing Rule — Applies Before Every Step
+
+Before navigating to any URL (`browser_navigate`) or fetching any API endpoint (WebFetch/WebSearch):
+
+```bash
+bash batch/pace-check.sh
 ```
-Agent(
-    subagent_type="general-purpose",
-    prompt="[content of this file + specific data]",
-    run_in_background=True
-)
-```
+
+- Output `ok` → proceed immediately
+- Output `wait N` → call `ScheduleWakeup(delaySeconds=N, prompt=<current loop prompt>)` and stop
+
+No `random-sleep.sh` is used in this mode — that pattern exists for LinkedIn bot detection only and is not needed for corporate careers pages or ATS APIs.
+
+---
 
 ## Configuration
 
@@ -72,44 +80,51 @@ Levels are additive — all run, results are merged and deduplicated.
 2. **Read history**: `data/scan-history.tsv` → URLs already seen
 3. **Read dedup sources**: `data/applications.md` + `data/pipeline.md`
 
-4. **Level 1 — Playwright scan** (parallel in batches of 3-5):
+4. **Level 1 — Playwright scan** (serial — one company at a time):
    For each company in `tracked_companies` with `enabled: true` and `careers_url` defined:
-   a. `browser_navigate` to `careers_url`
-   b. `browser_snapshot` to read all job listings
-   c. If the page has filters/departments, navigate relevant sections
-   d. For each job listing extract: `{title, url, company}`
-   e. If the page paginates, navigate additional pages
-   f. Accumulate in candidates list
-   g. If `careers_url` fails (404, redirect), try `scan_query` as fallback and note for URL update
+   a. `bash batch/pace-check.sh` → `wait N`: ScheduleWakeup(N) and stop | `ok`: continue
+   b. `browser_navigate` to `careers_url`
+   c. `browser_snapshot` to read all job listings
+   d. If the page has filters/departments, navigate relevant sections
+   e. For each job listing extract: `{title, url, company}`
+   f. If the page paginates:
+      - `bash batch/pace-check.sh` → gate
+      - `browser_navigate` to next page
+      - `browser_snapshot` → extract
+      - Repeat until no more pages
+   g. Accumulate in candidates list
+   h. If `careers_url` fails (404, redirect), try `scan_query` as fallback and note for URL update
 
-5. **Level 2 — ATS APIs / feeds** (parallel):
+5. **Level 2 — ATS APIs / feeds** (serial):
    For each company in `tracked_companies` with `api:` defined and `enabled: true`:
-   a. WebFetch the API/feed URL
-   b. If `api_provider` is defined, use its parser; if not defined, infer from domain (`boards-api.greenhouse.io`, `jobs.ashbyhq.com`, `api.lever.co`, `*.bamboohr.com`, `*.teamtailor.com`, `*.myworkdayjobs.com`)
-   c. For **Ashby**, send POST with:
+   a. `bash batch/pace-check.sh` → gate
+   b. WebFetch the API/feed URL
+   c. If `api_provider` is defined, use its parser; if not defined, infer from domain (`boards-api.greenhouse.io`, `jobs.ashbyhq.com`, `api.lever.co`, `*.bamboohr.com`, `*.teamtailor.com`, `*.myworkdayjobs.com`)
+   d. For **Ashby**, send POST with:
       - `operationName: ApiJobBoardWithTeams`
       - `variables.organizationHostedJobsPageName: {company}`
       - GraphQL query for `jobBoardWithTeams` + `jobPostings { id title locationName employmentType compensationTierSummary }`
-   d. For **BambooHR**, the list only brings basic metadata. For each relevant item, read `id`, GET `https://{company}.bamboohr.com/careers/{id}/detail`, and extract the full JD from `result.jobOpening`. Use `jobOpeningShareUrl` as the public URL if present; otherwise use the detail URL.
-   e. For **Workday**, send POST JSON with at least `{"appliedFacets":{},"limit":20,"offset":0,"searchText":""}` and paginate by `offset` until results are exhausted
-   f. For each job extract and normalize: `{title, url, company}`
-   g. Accumulate in candidates list (dedup with Level 1)
+   e. For **BambooHR**, the list only brings basic metadata. For each relevant item, read `id`, GET `https://{company}.bamboohr.com/careers/{id}/detail`, and extract the full JD from `result.jobOpening`. Use `jobOpeningShareUrl` as the public URL if present; otherwise use the detail URL.
+   f. For **Workday**, send POST JSON with at least `{"appliedFacets":{},"limit":20,"offset":0,"searchText":""}` and paginate by `offset` until results are exhausted
+   g. For each job extract and normalize: `{title, url, company}`
+   h. Accumulate in candidates list (dedup with Level 1)
 
-6. **Level 3 — WebSearch queries** (parallel if possible):
+6. **Level 3 — WebSearch queries** (serial):
    For each query in `search_queries` with `enabled: true`:
-   a. Run WebSearch with the defined `query`
-   b. From each result extract: `{title, url, company}`
+   a. `bash batch/pace-check.sh` → gate
+   b. Run WebSearch with the defined `query`
+   c. From each result extract: `{title, url, company}`
       - **title**: from the result title (before the " @ " or " | ")
       - **url**: result URL
       - **company**: after the " @ " in the title, or extracted from domain/path
-   c. Accumulate in candidates list (dedup with Level 1+2)
+   d. Accumulate in candidates list (dedup with Level 1+2)
 
-6. **Filter by title** using `title_filter` from `portals.yml`:
+7. **Filter by title** using `title_filter` from `portals.yml`:
    - At least 1 keyword from `positive` must appear in the title (case-insensitive)
    - 0 keywords from `negative` must appear
    - `seniority_boost` keywords give priority but are not required
 
-6b. **Filter by location (optional)** using `location_filter` from `portals.yml`:
+7b. **Filter by location (optional)** using `location_filter` from `portals.yml`:
    - If the `location_filter` block is absent, all locations pass (default behavior)
    - Empty location on an offer → passes (don't penalize missing data)
    - Any `block` keyword present → reject (takes precedence over allow)
@@ -118,21 +133,22 @@ Levels are additive — all run, results are merged and deduplicated.
    - All matches are case-insensitive substring
    - Location is persisted as the 7th column in `scan-history.tsv` for later audit
 
-7. **Deduplicate** against 3 sources:
+8. **Deduplicate** against 3 sources:
    - `scan-history.tsv` → exact URL already seen
    - `applications.md` → normalized company + role already evaluated
    - `pipeline.md` → exact URL already pending or processed
 
-7.5. **Verify liveness of WebSearch results (Level 3)** — BEFORE adding to pipeline:
+8.5. **Verify liveness of WebSearch results (Level 3)** — BEFORE adding to pipeline:
 
    > ⛔ **ABSOLUTE RULE: No URL from WebSearch (Level 3) can be added to `pipeline.md` without prior Playwright verification.** This rule has no exceptions. Google caches results for weeks or months. In previous scans, 31 URLs were added without verification and 88% were expired. Skipping this step is worse than not scanning. If there's no time to verify, don't add.
 
    Levels 1 and 2 are inherently real-time and do not require verification.
 
-   For each new Level 3 URL (sequential — NEVER Playwright in parallel):
-   a. `browser_navigate` to the URL
-   b. `browser_snapshot` to read the content
-   c. Classify:
+   For each new Level 3 URL (sequential):
+   a. `bash batch/pace-check.sh` → gate
+   b. `browser_navigate` to the URL
+   c. `browser_snapshot` to read the content
+   d. Classify:
       - **Active**: job title visible + role description + Apply/Submit control visible within the main content. Don't count generic header/navbar/footer text.
       - **Expired** (any of these signals):
         - Final URL contains `?error=true` (Greenhouse redirects this way when an offer is closed)
@@ -140,18 +156,18 @@ Levels are additive — all run, results are merged and deduplicated.
         - Redirects to a generic job search page (e.g. `apply.careers.microsoft.com`, `careers.company.com/jobs`)
         - HTTP 404, 410, or 403 — log as `skipped_expired`
         - Only navbar and footer visible, no JD content (content < ~300 chars)
-   d. If expired: log in `scan-history.tsv` with status `skipped_expired` and discard
-   e. If active: continue to step 8
+   e. If expired: log in `scan-history.tsv` with status `skipped_expired` and discard
+   f. If active: continue to step 9
 
    **Don't abort the entire scan if one URL fails.** If `browser_navigate` errors (timeout, 403, etc.), mark as `skipped_expired` and continue with the next.
 
-8. **For each new verified offer that passes filters**:
+9. **For each new verified offer that passes filters**:
    a. Add to `pipeline.md` under "Pending": `- [ ] {url} | {company} | {title}`
    b. Log in `scan-history.tsv`: `{url}\t{date}\t{query_name}\t{title}\t{company}\tadded`
 
-9. **Offers filtered by title**: log in `scan-history.tsv` with status `skipped_title`
-10. **Duplicate offers**: log with status `skipped_dup`
-11. **Expired offers (Level 3)**: log with status `skipped_expired`
+10. **Offers filtered by title**: log in `scan-history.tsv` with status `skipped_title`
+11. **Duplicate offers**: log with status `skipped_dup`
+12. **Expired offers (Level 3)**: log with status `skipped_expired`
 
 ## Title and Company Extraction from WebSearch Results
 
@@ -185,9 +201,9 @@ https://...	2026-02-10	WebSearch — AI PM	PM AI	ClosedCo	skipped_expired
 ## Output Summary
 
 ```
-Portal Scan — {YYYY-MM-DD}
+Portal Scan (serial) — {YYYY-MM-DD}
 ━━━━━━━━━━━━━━━━━━━━━━━━━━
-Queries run: N
+Companies scanned: N
 Offers found: N total
 Filtered by title: N relevant
 Duplicates: N (already evaluated or in pipeline)
@@ -235,7 +251,7 @@ Fallback: if you only have the direct ATS URL, navigate to the company website f
 **If `careers_url` doesn't exist** for a company:
 1. Try the pattern for its known platform
 2. If that fails, do a quick WebSearch: `"{company}" careers jobs`
-3. Navigate with Playwright to confirm it works
+3. Navigate with Playwright to confirm it works — pace check first
 4. **Save the found URL in portals.yml** for future scans
 
 **If `careers_url` returns 404 or redirect:**

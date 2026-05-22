@@ -78,7 +78,7 @@ async function generatePDF() {
   const args = process.argv.slice(2);
 
   // Parse arguments
-  let inputPath, outputPath, format = 'a4';
+  let inputPath, outputPath, format = 'letter';
 
   for (const arg of args) {
     if (arg.startsWith('--format=')) {

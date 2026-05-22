@@ -2,16 +2,36 @@
 
 Process job URLs stored in `data/pipeline.md`. The user adds URLs at any time and then executes `/career-ops pipeline` to process them all.
 
+## Rate Limit Pacing — MANDATORY
+
+**Before processing each item**, run the appropriate pacing command:
+
+**Interactive session (main agent):**
+```bash
+bash batch/pace-check.sh
+```
+- `wait > 60` → call `ScheduleWakeup` with that delay and stop
+- `wait ≤ 60` → proceed
+
+**Background subagent (headless):**
+```bash
+bash batch/pace-gate.sh
+```
+This blocks in bash until the rate is clear — do NOT use ScheduleWakeup in a background subagent. pace-gate.sh handles the wait internally.
+
+**This rule has no exceptions.** Every item must be gated. The goal is sustainable rate usage across the full window, not burning capacity in minutes.
+
 ## Workflow
 
 1. **Read** `data/pipeline.md` → search for `- [ ]` items in the "Pending" section
 2. **For each pending URL**:
-   a. Calculate the next sequential `REPORT_NUM` (read `reports/`, take the highest number + 1)
-   b. **Extract JD** using Playwright (browser_navigate + browser_snapshot) → WebFetch → WebSearch
-   c. If the URL is not accessible → mark as `- [!]` with a note and continue
-   d. **Execute full auto-pipeline**: Evaluation A-F → Report .md → PDF (if score >= 3.0) → Tracker
-   e. **Move from "Pending" to "Processed"**: `- [x] #NNN | URL | Company | Role | Score/5 | PDF ✅/❌`
-3. **If there are 3+ pending URLs**, launch agents in parallel (Agent tool with `run_in_background`) to maximize speed.
+   a. **Check rate limit** (see pacing rule above) — pause if needed before fetching
+   b. Calculate the next sequential `REPORT_NUM` (read `reports/`, take the highest number + 1)
+   c. **Extract JD** using Playwright (browser_navigate + browser_snapshot) → WebFetch → WebSearch
+   d. If the URL is not accessible → mark as `- [!]` with a note and continue
+   e. **Execute full auto-pipeline**: Evaluation A-F → Report .md → **Score gate**: if score < 4.0, skip PDF only, use status `SKIP` in tracker → if score >= 4.0: PDF → Tracker (status `Evaluated`)
+   f. **Move from "Pending" to "Processed"**: `- [x] #NNN | URL | Company | Role | Score/5 | PDF ✅/❌`
+3. **Sequential only when running without subagents.** If subagents are authorized, parallel processing is allowed — but pacing still applies per worker.
 4. **At the end**, show summary table:
 
 ```
