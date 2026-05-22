@@ -3,6 +3,8 @@
 Scans configured job portals, filters by title relevance, and adds new offers to the pipeline for later evaluation.
 
 > **Note (v1.5+):** The default scanner (`scan.mjs` / `npm run scan`) is **zero-token** and only queries Greenhouse, Ashby, and Lever public APIs directly. The Playwright/WebSearch levels described below are the **agent** flow (run by Claude/Codex), not what `scan.mjs` does. If a company has no Greenhouse/Ashby/Lever API, `scan.mjs` will skip it; for those cases, the agent must manually complete Level 1 (Playwright) or Level 3 (WebSearch).
+>
+> **Rule (v1.8+):** If a company's local parser succeeds at Level 0, the agent **must not** repeat that company at Level 1 (Playwright) or Level 2 (API). Level 3 general queries remain active, but results for companies already covered by a successful parser are discarded. See [Rule: successful local parser](#rule-successful-local-parser--no-repeated-expensive-scraping).
 
 ## Recommended Execution
 
@@ -23,7 +25,63 @@ Read `portals.yml` which contains:
 - `tracked_companies`: Specific companies with `careers_url` for direct navigation
 - `title_filter`: Positive/negative/seniority_boost keywords for title filtering
 
-## Discovery Strategy (3 levels)
+## Discovery Strategy (4 levels)
+
+### Level 0 — Local Parser (CHEAPEST)
+
+**For each company in `tracked_companies` with `parser:` configured:** run the local parser defined in `portals.yml`. Ideal when the careers page uses SSR or stable HTML and a JavaScript, Python, or other local-runtime script already exists to extract jobs without agent help.
+
+Recommended contract:
+
+```yaml
+- name: Example Company
+  careers_url: https://example.com/careers
+  scan_method: local_parser
+  parser:
+    command: node
+    script: scripts/parsers/example-company-jobs.js
+    format: jobs-json-v1
+  enabled: true
+```
+
+`args` is optional: use it to reuse the script across companies, pass `{careers_url}` or `{company}`, enable a debug flag, or control any parser-specific behavior.
+
+The parser must print JSON to stdout in one of these formats:
+
+```json
+[{ "title": "Senior AI Engineer", "url": "https://example.com/jobs/123", "location": "Remote" }]
+```
+```json
+{ "jobs": [{ "title": "...", "url": "...", "location": "..." }] }
+```
+```json
+{ "results": [{ "title": "...", "url": "...", "location": "..." }] }
+```
+
+`company` is optional in the output; if absent, `scan.mjs` uses the name from `tracked_companies`. If a parser generates audit artifacts, save them to `data/parser-output/{company}/` (JSON files are gitignored; `.gitkeep` stays in git).
+
+### Rule: successful local parser — no repeated expensive scraping
+
+The goal of `scan_method: local_parser` is **to reduce tokens**: prevent the LLM from re-scraping the same company with Playwright or redundant APIs.
+
+During the agent scan, maintain in memory the set **`local_parser_ok`**: company names (`tracked_companies[].name`) where Level 0 completed successfully:
+
+- `parser.command` + `parser.script` exist and the script ran without a fatal error
+- stdout was valid JSON (`[]`, `{ jobs: [] }`, or `{ results: [] }`)
+- No timeout or process crash
+
+| Level | If the company is in `local_parser_ok` |
+|-------|----------------------------------------|
+| **1 — Playwright** | **Skip** — no `browser_navigate` (most expensive in tokens) |
+| **2 — API** | **Skip** — no WebFetch (already covered; `scan.mjs` also skips API after a successful parser) |
+| **3 — WebSearch** | Run **general** queries (`site:`, role titles); **discard** hits whose normalized company matches `local_parser_ok` |
+
+**Exceptions:**
+- Parser **failed** → company does **not** enter `local_parser_ok`; Levels 1 and 2 apply normally.
+- Level 3: don't disable cross-portal queries (`site:jobs.ashbyhq.com`, etc.) — they discover **new** companies. Only filter results for companies already in `tracked_companies` with a successful parser.
+- Don't create dedicated `search_queries` for a company with an active local parser; use the parser or, if it fails, Playwright/API.
+
+**Recommended:** run `node scan.mjs` (or `npm run scan`) at the start of the agent workflow. This covers local parsers + APIs in a single zero-token step and returns which companies used `local-parser` successfully.
 
 ### Level 1 — Direct Playwright (PRIMARY)
 
@@ -60,11 +118,12 @@ For companies with a public API or structured feed, use the JSON/XML response as
 The `search_queries` with `site:` filters cover portals broadly (all Ashby, all Greenhouse, etc.). Useful for discovering NEW companies not yet in `tracked_companies`, but results may be stale.
 
 **Execution priority:**
-1. Level 1: Playwright → all `tracked_companies` with `careers_url`
-2. Level 2: API → all `tracked_companies` with `api:`
-3. Level 3: WebSearch → all `search_queries` with `enabled: true`
+1. Level 0: Local parser → companies with `parser:` configured and script present; build `local_parser_ok`
+2. Level 1: Playwright → `tracked_companies` with `careers_url`, **except** `local_parser_ok`
+3. Level 2: API → `tracked_companies` with `api:`, **except** `local_parser_ok`
+4. Level 3: WebSearch → all `search_queries` with `enabled: true`; discard hits from companies in `local_parser_ok`
 
-Levels are additive — all run, results are merged and deduplicated.
+Levels are additive — all run in order, results are merged and deduplicated.
 
 ## Workflow
 
@@ -72,8 +131,20 @@ Levels are additive — all run, results are merged and deduplicated.
 2. **Read history**: `data/scan-history.tsv` → URLs already seen
 3. **Read dedup sources**: `data/applications.md` + `data/pipeline.md`
 
+3.5. **Level 0 — Local parser** (`scan.mjs`, zero-token):
+   Initialize `local_parser_ok = []`.
+   Prefer running `node scan.mjs` once to cover all parsers + APIs in a single zero-token step; if done manually, repeat the following logic.
+   For each company in `tracked_companies` with `enabled: true`, `parser.command` defined, and script present:
+   a. Run `parser.command` with `parser.script` + `parser.args` using local execution (no shell)
+   b. Expand `{careers_url}` and `{company}` placeholders in arguments
+   c. Read JSON from stdout (`[]`, `{ jobs: [] }`, or `{ results: [] }`)
+   d. Normalize each job to `{title, url, company, location}`
+   e. Resolve relative URLs against `careers_url`
+   f. If parser fails: log error, try ATS API fallback if configured, continue to next company (**do not** add to `local_parser_ok`)
+   g. If parser succeeds (steps c–e without fatal error): add `entry.name` to `local_parser_ok` and accumulate jobs into candidates
+
 4. **Level 1 — Playwright scan** (parallel in batches of 3-5):
-   For each company in `tracked_companies` with `enabled: true` and `careers_url` defined:
+   For each company in `tracked_companies` with `enabled: true`, `careers_url` defined, and **name NOT in `local_parser_ok`**:
    a. `browser_navigate` to `careers_url`
    b. `browser_snapshot` to read all job listings
    c. If the page has filters/departments, navigate relevant sections
@@ -83,7 +154,7 @@ Levels are additive — all run, results are merged and deduplicated.
    g. If `careers_url` fails (404, redirect), try `scan_query` as fallback and note for URL update
 
 5. **Level 2 — ATS APIs / feeds** (parallel):
-   For each company in `tracked_companies` with `api:` defined and `enabled: true`:
+   For each company in `tracked_companies` with `api:` defined, `enabled: true`, and **name NOT in `local_parser_ok`**:
    a. WebFetch the API/feed URL
    b. If `api_provider` is defined, use its parser; if not defined, infer from domain (`boards-api.greenhouse.io`, `jobs.ashbyhq.com`, `api.lever.co`, `*.bamboohr.com`, `*.teamtailor.com`, `*.myworkdayjobs.com`)
    c. For **Ashby**, send POST with:
