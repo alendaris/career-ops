@@ -181,6 +181,34 @@ Analyze posting signals to assess whether this is a real, active opening.
 | Red Flags | -X (if any) |
 | **Global** | **X/5** |
 
+#### Machine Summary
+
+Create a machine-readable summary from the completed A-G evaluation and global score. This block is for downstream scripts; keep field names exact, use YAML, and do not add prose inside the fence.
+
+```yaml
+company: "{company}"
+role: "{role}"
+score: {X.X}
+legitimacy_tier: "{High Confidence | Proceed with Caution | Suspicious}"
+archetype: "{detected}"
+final_decision: "{Apply | Consider | Research first | Skip}"
+hard_stops:
+  - "{blocking gap or risk}"
+soft_gaps:
+  - "{non-blocking gap}"
+top_strengths:
+  - "{strength most relevant to this role}"
+risk_level: "{Low | Medium | High}"
+confidence: "{Low | Medium | High}"
+next_action: "{one concrete next step}"
+```
+
+Rules:
+- Use `[]` for `hard_stops`, `soft_gaps`, or `top_strengths` when empty.
+- `score` is numeric only, without `/5`.
+- `final_decision` must reflect the full evaluation, not only the CV match.
+- Do not invent missing data. If confidence is limited, set `confidence: "Low"` and explain the limitation in the human-readable sections.
+
 ### Score Gate
 
 After calculating the Global Score, apply this check **before generating any CV artifacts**:
@@ -213,6 +241,26 @@ Where `{company-slug}` is the company name in lowercase, no spaces, with hyphens
 **Verification:** unconfirmed (batch mode)
 
 ---
+
+## Machine Summary
+
+```yaml
+company: "{company}"
+role: "{role}"
+score: {X.X}
+legitimacy_tier: "{High Confidence | Proceed with Caution | Suspicious}"
+archetype: "{detected}"
+final_decision: "{Apply | Consider | Research first | Skip}"
+hard_stops:
+  - "{blocking gap or risk}"
+soft_gaps:
+  - "{non-blocking gap}"
+top_strengths:
+  - "{strength most relevant to this role}"
+risk_level: "{Low | Medium | High}"
+confidence: "{Low | Medium | High}"
+next_action: "{one concrete next step}"
+```
 
 ## A) Role Summary
 (full content)
