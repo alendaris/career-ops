@@ -10,8 +10,12 @@ Process job URLs stored in `data/pipeline.md`. The user adds URLs at any time an
 ```bash
 bash batch/pace-check.sh
 ```
-- `wait > 60` → call `ScheduleWakeup` with that delay and stop
 - `wait ≤ 60` → proceed
+- `wait N` where `N ≤ 3600` → call `ScheduleWakeup(N)` and stop
+- `wait N` where `N > 3600` → use `CronCreate` (one-shot, `recurring: false`):
+  1. Compute target = now + N + 600 (10 min buffer)
+  2. Derive cron fields: `date -v +{target}S '+%M %H %d %m'`
+  3. Call `CronCreate(cron="MM HH DD Mon *", recurring=false, prompt="<resume prompt>")`, report job ID to user
 
 **Background subagent (headless):**
 ```bash

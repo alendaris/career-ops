@@ -8,11 +8,18 @@
 input=$(cat)
 
 # --- Rate limit snapshot (for pace-check.sh) ---
-rl_five=$(printf '%s' "$input"   | jq -r '.rate_limits.five_hour.used_percentage // empty' 2>/dev/null)
-rl_resets=$(printf '%s' "$input" | jq -r '.rate_limits.five_hour.resets_at // empty'       2>/dev/null)
+rl_five=$(printf '%s' "$input"      | jq -r '.rate_limits.five_hour.used_percentage // empty'  2>/dev/null)
+rl_resets=$(printf '%s' "$input"    | jq -r '.rate_limits.five_hour.resets_at // empty'        2>/dev/null)
+rl_seven=$(printf '%s' "$input"     | jq -r '.rate_limits.seven_day.used_percentage // empty'  2>/dev/null)
+rl_resets_7d=$(printf '%s' "$input" | jq -r '.rate_limits.seven_day.resets_at // empty'       2>/dev/null)
 if [ -n "$rl_five" ] && [ -n "$rl_resets" ]; then
-    printf '{"used_pct":%s,"resets_at":%s,"ts":%s}\n' \
-        "$rl_five" "$rl_resets" "$(date +%s)" > /tmp/claude-rl.json
+    if [ -n "$rl_seven" ] && [ -n "$rl_resets_7d" ]; then
+        printf '{"used_pct":%s,"resets_at":%s,"ts":%s,"used_pct_7d":%s,"resets_at_7d":%s}\n' \
+            "$rl_five" "$rl_resets" "$(date +%s)" "$rl_seven" "$rl_resets_7d" > /tmp/claude-rl.json
+    else
+        printf '{"used_pct":%s,"resets_at":%s,"ts":%s}\n' \
+            "$rl_five" "$rl_resets" "$(date +%s)" > /tmp/claude-rl.json
+    fi
 fi
 
 # --- Upstream statusline ---

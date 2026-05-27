@@ -27,7 +27,9 @@ NO_WAIT=false
 usage() {
   cat <<'USAGE'
 pace-gate.sh — Rate limit gate for career-ops batch operations.
-Blocks until the Claude 5h rate limit window has headroom (target: ≤90% projected).
+Blocks until both rate limit windows have headroom:
+  5h window: target ≤90% projected (conservative)
+  7d window: target ≤100% projected (maximize weekly budget)
 
 Usage: bash batch/pace-gate.sh [OPTIONS]
 
@@ -64,10 +66,11 @@ log() { [[ "$QUIET" == "false" ]] && echo "$@"; }
 waited=0
 
 while true; do
-  result=$(bash "$PACE_CHECK")
+  full_output=$(bash "$PACE_CHECK")
+  result=$(echo "$full_output" | tail -1)
 
   if [[ "$result" != wait* ]]; then
-    log "  [pace-gate] Clear — $result"
+    log "  [pace-gate] Clear — $full_output"
     exit 0
   fi
 
